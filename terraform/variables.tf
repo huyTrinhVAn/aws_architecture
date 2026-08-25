@@ -6,3 +6,15 @@ variable "project_name" {
   type        = string
   default     = "sa-portfolio"
 }
+
+variable "app_port" {
+  description = "Port the Budget Tracker API listens on"
+  type        = number
+  default     = 8080
+}
+
+variable "db_port" {
+  description = "Port the database listens on (3306 = MySQL, 5432 = Postgres)"
+  type        = number
+  default     = 3306
+}
