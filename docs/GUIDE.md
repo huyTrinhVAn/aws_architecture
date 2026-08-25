@@ -63,6 +63,49 @@ No NAT Gateway, no bastion host, no SSH key anywhere in this architecture.
 - Why split into three subnet tiers (public / app / db) instead of one
 - Internet Gateway vs. NAT Gateway — which handles which direction of traffic
 
+**Visual: route tables and subnet associations**
+
+```mermaid
+flowchart TB
+    Internet(("Internet"))
+    IGW["Internet Gateway"]
+
+    RTPub["route table: public-rt<br/>0.0.0.0/0 → IGW<br/>10.0.0.0/16 → local"]
+    RTApp["route table: app-rt<br/>10.0.0.0/16 → local<br/>(no route to 0.0.0.0/0)"]
+    RTDb["route table: db-rt<br/>10.0.0.0/16 → local<br/>(no route to 0.0.0.0/0)"]
+
+    SubPubA["public subnet AZ1<br/>10.0.0.0/24"]
+    SubPubB["public subnet AZ2<br/>10.0.1.0/24"]
+    SubAppA["app subnet AZ1<br/>10.0.10.0/24"]
+    SubAppB["app subnet AZ2<br/>10.0.11.0/24"]
+    SubDbA["db subnet AZ1<br/>10.0.20.0/24"]
+    SubDbB["db subnet AZ2<br/>10.0.21.0/24"]
+
+    Internet <--> IGW
+    IGW --- RTPub
+    RTPub --- SubPubA
+    RTPub --- SubPubB
+    RTApp --- SubAppA
+    RTApp --- SubAppB
+    RTDb --- SubDbA
+    RTDb --- SubDbB
+
+    subgraph VPC["VPC 10.0.0.0/16"]
+        IGW
+        RTPub
+        RTApp
+        RTDb
+        SubPubA
+        SubPubB
+        SubAppA
+        SubAppB
+        SubDbA
+        SubDbB
+    end
+```
+
+Read it as: each subnet connects to exactly one route table, and only `public-rt` has a route to the Internet Gateway. `app-rt` and `db-rt` only have the implicit `local` route (traffic within the VPC's own `10.0.0.0/16`), so instances in those subnets have no path to the internet at all yet — not because anything is blocking them, but because no route exists. Phase 3 gives them a path to specific AWS services via VPC Endpoints, without ever adding a `0.0.0.0/0` route.
+
 **Tasks:**
 1. Sketch your own CIDR layout (e.g. VPC `10.0.0.0/16`, public `10.0.0.0/24` and `10.0.1.0/24`, app `10.0.10.0/24`/`10.0.11.0/24`, db `10.0.20.0/24`/`10.0.21.0/24`) spread across 2 AZs.
 2. Write Terraform to create: the VPC, an Internet Gateway, 6 subnets, 3 route tables, and their associations.
