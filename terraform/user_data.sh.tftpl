@@ -1,0 +1,48 @@
+#!/bin/bash
+set -euxo pipefail
+
+# Phase 4a: prove the ALB -> target group -> ASG -> health check chain works
+# end to end, using only Python's standard library (http.server, already on
+# the AL2023 base image) so this needs zero pip installs and zero internet
+# access. The app subnet has no route out except the VPC endpoints from
+# Phase 3, and PyPI isn't one of them.
+#
+# The real Flask app (../app/app.py) needs `pip install`, which needs PyPI,
+# which needs internet -- swapping this placeholder out for it requires a
+# deliberate decision (temporarily enable NAT for install, bake a custom
+# AMI, or vendor dependencies via S3) made explicitly in Phase 5, not
+# silently patched over here.
+
+mkdir -p /opt/app
+cat > /opt/app/server.py <<'PYEOF'
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+HTTPServer(("0.0.0.0", ${app_port}), Handler).serve_forever()
+PYEOF
+
+cat > /etc/systemd/system/app.service <<'UNITEOF'
+[Unit]
+Description=Placeholder health-check server (Phase 4a)
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/app/server.py
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+
+systemctl daemon-reload
+systemctl enable --now app.service
