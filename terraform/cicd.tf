@@ -61,6 +61,26 @@ resource "aws_iam_role_policy_attachment" "github_actions_ci_readonly" {
   policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
 }
 
+# ReadOnlyAccess covers reading the state file itself, but `terraform plan`
+# with S3 native locking also needs to write and then delete a small
+# `.tflock` object to acquire/release the lock before it can read state --
+# a write action ReadOnlyAccess deliberately excludes. Scoped to exactly
+# the state file's path in this one bucket, not broad S3 write access.
+resource "aws_iam_role_policy" "github_actions_ci_state_lock" {
+  name = "${var.project_name}-github-actions-ci-state-lock"
+  role = aws_iam_role.github_actions_ci.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "StateLockFile"
+      Effect   = "Allow"
+      Action   = ["s3:PutObject", "s3:DeleteObject"]
+      Resource = "arn:aws:s3:::sa-portfolio-tfstate-42ac9a0e/sa-portfolio/*"
+    }]
+  })
+}
+
 output "github_actions_role_arn" {
   value = aws_iam_role.github_actions_ci.arn
 }
