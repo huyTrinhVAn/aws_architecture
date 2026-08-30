@@ -50,8 +50,13 @@ resource "aws_security_group" "vpc_endpoints" {
 # ssm: control-plane API (session start, agent registration)
 # ssmmessages: the live data channel for an open Session Manager session
 # ec2messages: the channel the SSM Agent polls for commands to run
+# secretsmanager: added after user_data's GetSecretValue call was found
+# hanging indefinitely at boot -- no route existed to reach it at all,
+# unlike a rejected/failed connection, which is why it looked like a hang
+# rather than an error. Same pattern as the other three: reuses this
+# security group, still no NAT Gateway needed.
 resource "aws_vpc_endpoint" "ssm" {
-  for_each            = toset(["ssm", "ssmmessages", "ec2messages"])
+  for_each            = toset(["ssm", "ssmmessages", "ec2messages", "secretsmanager"])
   vpc_id              = aws_vpc.this.id
   service_name        = "com.amazonaws.${var.aws_region}.${each.value}"
   vpc_endpoint_type   = "Interface"

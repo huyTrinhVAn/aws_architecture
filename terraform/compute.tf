@@ -35,7 +35,11 @@ resource "aws_launch_template" "app" {
   }
 
   user_data = base64encode(templatefile("${path.module}/user_data.sh.tftpl", {
-    app_port = var.app_port
+    app_port        = var.app_port
+    aws_region      = var.aws_region
+    deploy_bucket   = aws_s3_bucket.deploy.bucket
+    receipts_bucket = aws_s3_bucket.receipts.bucket
+    secret_arn      = aws_secretsmanager_secret.db_credentials.arn
   }))
 
   tag_specifications {

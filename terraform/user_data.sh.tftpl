@@ -1,42 +1,65 @@
 #!/bin/bash
 set -euxo pipefail
 
-# Phase 4a: prove the ALB -> target group -> ASG -> health check chain works
-# end to end, using only Python's standard library (http.server, already on
-# the AL2023 base image) so this needs zero pip installs and zero internet
-# access. The app subnet has no route out except the VPC endpoints from
-# Phase 3, and PyPI isn't one of them.
-#
-# The real Flask app (../app/app.py) needs `pip install`, which needs PyPI,
-# which needs internet -- swapping this placeholder out for it requires a
-# deliberate decision (temporarily enable NAT for install, bake a custom
-# AMI, or vendor dependencies via S3) made explicitly in Phase 5, not
-# silently patched over here.
+# Phase 5: deploy the real Flask app. It arrives as a self-contained bundle
+# (code + vendored ARM64 wheels, built by CI's build-and-deploy-app job) so
+# nothing here ever needs PyPI -- app subnets have no internet path, only
+# the S3 gateway endpoint from Phase 3, which is what fetches this bundle.
+
+# python3-pip isn't in the base AL2023 image. dnf can still reach it: AL2023's
+# package repos are backed by S3 buckets AWS operates, reachable through the
+# same free S3 gateway endpoint used for the bundle below -- no NAT needed.
+dnf install -y python3-pip unzip
 
 mkdir -p /opt/app
-cat > /opt/app/server.py <<'PYEOF'
-from http.server import BaseHTTPRequestHandler, HTTPServer
+aws s3 cp "s3://${deploy_bucket}/bundle.zip" /opt/app/bundle.zip --region ${aws_region}
+unzip -o /opt/app/bundle.zip -d /opt/app
 
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/health":
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"ok")
-        else:
-            self.send_response(404)
-            self.end_headers()
+# --no-index --find-links installs only from the vendored wheels shipped in
+# the bundle -- pip never attempts to reach PyPI.
+pip3 install --no-index --find-links=/opt/app/vendor -r /opt/app/requirements.txt
 
-HTTPServer(("0.0.0.0", ${app_port}), Handler).serve_forever()
+# The instance's IAM role (from Phase 2) grants exactly this one secret's
+# GetSecretValue -- nothing else. python3's json module (stdlib, no install
+# needed) parses it directly rather than pulling in a jq dependency.
+aws secretsmanager get-secret-value \
+  --secret-id "${secret_arn}" \
+  --region ${aws_region} \
+  --query SecretString \
+  --output text > /tmp/db_secret.json
+
+python3 - <<'PYEOF'
+import json
+
+with open("/tmp/db_secret.json") as f:
+    secret = json.load(f)
+
+with open("/etc/app.env", "w") as f:
+    f.write(f"DB_HOST={secret['host']}\n")
+    f.write(f"DB_PORT={secret['port']}\n")
+    f.write(f"DB_USER={secret['username']}\n")
+    f.write(f"DB_PASSWORD={secret['password']}\n")
+    f.write(f"DB_NAME={secret['dbname']}\n")
 PYEOF
 
-cat > /etc/systemd/system/app.service <<'UNITEOF'
+chmod 600 /etc/app.env
+rm -f /tmp/db_secret.json
+
+cat >> /etc/app.env <<EOF
+APP_PORT=${app_port}
+RECEIPTS_BUCKET=${receipts_bucket}
+AWS_DEFAULT_REGION=${aws_region}
+EOF
+
+cat > /etc/systemd/system/app.service <<UNITEOF
 [Unit]
-Description=Placeholder health-check server (Phase 4a)
+Description=Budget Tracker Flask app
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /opt/app/server.py
+EnvironmentFile=/etc/app.env
+WorkingDirectory=/opt/app
+ExecStart=/usr/bin/python3 /opt/app/app.py
 Restart=always
 User=root
 
