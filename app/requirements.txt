@@ -1,3 +1,10 @@
 flask==3.0.3
 pymysql==1.1.1
 boto3==1.34.162
+# Flask only needs this on Python <3.10 (its own conditional dependency
+# marker) -- listed explicitly rather than relying on marker evaluation
+# during `pip download`, since that behaves inconsistently across pip
+# versions/host interpreters (confirmed missing from the vendor bundle
+# even with --python-version passed explicitly). The runtime AMI's actual
+# python3 is 3.9, so this is required, not optional.
+importlib-metadata==7.1.0

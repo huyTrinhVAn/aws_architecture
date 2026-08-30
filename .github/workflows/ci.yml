@@ -103,7 +103,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.9" # matches AL2023's actual system python3 (3.9.25), not an arbitrary choice
 
       - name: Download dependency wheels for Graviton (ARM64) Linux
         working-directory: app
@@ -111,7 +111,7 @@ jobs:
           mkdir -p vendor
           pip download \
             --platform manylinux2014_aarch64 \
-            --python-version 3.12 \
+            --python-version 3.9 \
             --only-binary=:all: \
             -r requirements.txt \
             -d vendor/
