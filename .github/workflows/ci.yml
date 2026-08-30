@@ -30,6 +30,36 @@ jobs:
       - name: terraform validate
         run: terraform validate
 
+  # Only runs on pushes to main -- the IAM role's trust policy is scoped to
+  # ref:refs/heads/main, so a pull_request run (different sub claim, and
+  # possibly from a fork) could not assume it anyway even if this ran.
+  terraform-plan:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # required to request the OIDC token
+      contents: read
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::197285016437:role/sa-portfolio-github-actions-ci
+          aws-region: us-east-1
+
+      - name: terraform init
+        run: terraform init
+
+      - name: terraform plan
+        run: terraform plan -no-color
+
   app-tests:
     runs-on: ubuntu-latest
     defaults:
