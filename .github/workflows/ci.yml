@@ -45,16 +45,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Temporary debug step: print exactly what GitHub's OIDC token will
-      # assert for this run, so the IAM trust policy's `sub` condition can
-      # be matched character-for-character instead of guessed. Remove once
-      # the role assumption below succeeds.
-      - name: debug OIDC context
-        run: |
-          echo "github.repository = ${{ github.repository }}"
-          echo "github.ref = ${{ github.ref }}"
-          echo "expected sub = repo:${{ github.repository }}:ref:${{ github.ref }}"
-
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.15.8"

@@ -34,7 +34,14 @@ resource "aws_iam_role" "github_actions_ci" {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:huyTrinhVAn/aws_architecture:ref:refs/heads/main"
+          # GitHub's actual sub claim includes immutable numeric IDs after
+          # the owner and repo names (repo:OWNER@OWNER_ID/REPO@REPO_ID:...),
+          # not just repo:OWNER/REPO:... as most docs/examples show --
+          # confirmed via CloudTrail's logged AccessDenied event. Wildcard
+          # the ID portions since they add no security value here (this
+          # role is already scoped to one specific role ARN) and pinning
+          # them would silently break if GitHub ever changes the ID.
+          "token.actions.githubusercontent.com:sub" = "repo:huyTrinhVAn@*/aws_architecture@*:ref:refs/heads/main"
         }
       }
     }]
