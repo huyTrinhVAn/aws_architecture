@@ -57,8 +57,15 @@ jobs:
       - name: terraform init
         run: terraform init
 
+      # -refresh=false on purpose: a full refresh needs to read every
+      # resource's live value, and for aws_secretsmanager_secret_version
+      # that Read *is* a secretsmanager:GetSecretValue call. Granting the
+      # read-only CI role permission to read actual secret contents would
+      # undercut the whole point of keeping it read-only. Trade-off: this
+      # plan reflects state as of the last local `apply`, not a live
+      # re-check of every resource.
       - name: terraform plan
-        run: terraform plan -no-color
+        run: terraform plan -no-color -refresh=false
 
   app-tests:
     runs-on: ubuntu-latest
