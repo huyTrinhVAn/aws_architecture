@@ -18,6 +18,8 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+app/vendor/
+app/bundle.zip
 
 # Node
 node_modules/

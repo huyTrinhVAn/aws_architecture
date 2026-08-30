@@ -84,3 +84,55 @@ resource "aws_iam_role_policy" "github_actions_ci_state_lock" {
 output "github_actions_role_arn" {
   value = aws_iam_role.github_actions_ci.arn
 }
+
+# Separate from github_actions_ci on purpose -- that role stays read-only
+# for `terraform plan`. This role exists only to let the app-bundle build
+# job upload to the deploy bucket, so a bug or compromise in that one
+# workflow step can't be leveraged into reading the rest of the account.
+resource "aws_iam_role" "github_actions_deploy" {
+  name = "${var.project_name}-github-actions-deploy"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Federated = aws_iam_openid_connect_provider.github.arn }
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+        }
+        StringLike = {
+          "token.actions.githubusercontent.com:sub" = "repo:huyTrinhVAn@*/aws_architecture@*:ref:refs/heads/main"
+        }
+      }
+    }]
+  })
+
+  tags = {
+    Name    = "${var.project_name}-github-actions-deploy"
+    Project = var.project_name
+  }
+}
+
+# Only PutObject on the deploy bucket -- no read, no delete, no access to
+# any other bucket or service. This role cannot read receipts, cannot touch
+# Terraform state, cannot see any other resource in the account.
+resource "aws_iam_role_policy" "github_actions_deploy_s3" {
+  name = "${var.project_name}-github-actions-deploy-s3"
+  role = aws_iam_role.github_actions_deploy.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "UploadAppBundle"
+      Effect   = "Allow"
+      Action   = ["s3:PutObject"]
+      Resource = "${aws_s3_bucket.deploy.arn}/*"
+    }]
+  })
+}
+
+output "github_actions_deploy_role_arn" {
+  value = aws_iam_role.github_actions_deploy.arn
+}

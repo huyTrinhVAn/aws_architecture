@@ -77,3 +77,48 @@ jobs:
 
       - name: Run tests
         run: pytest -v
+
+  # Builds a self-contained bundle (app code + offline-installable
+  # dependency wheels) and uploads it to S3, since the app subnet has no
+  # internet access to reach PyPI at instance-boot time. `pip download`
+  # doesn't need to run on the target architecture -- it just fetches
+  # prebuilt wheels matching --platform from PyPI's index, so this works
+  # fine on the runner's own x86_64 Linux even though EC2 runs ARM64.
+  build-and-deploy-app:
+    if: github.ref == 'refs/heads/main'
+    needs: app-tests
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download dependency wheels for Graviton (ARM64) Linux
+        working-directory: app
+        run: |
+          mkdir -p vendor
+          pip download \
+            --platform manylinux2014_aarch64 \
+            --python-version 3.12 \
+            --only-binary=:all: \
+            -r requirements.txt \
+            -d vendor/
+
+      - name: Build deployment bundle
+        working-directory: app
+        run: |
+          zip -r ../bundle.zip . \
+            -x ".venv/*" "__pycache__/*" ".pytest_cache/*" "test_app.py" "requirements-dev.txt"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::197285016437:role/sa-portfolio-github-actions-deploy
+          aws-region: us-east-1
+
+      - name: Upload bundle to S3
+        run: aws s3 cp bundle.zip s3://sa-portfolio-deploy-57440759/bundle.zip
