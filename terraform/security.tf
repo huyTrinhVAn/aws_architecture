@@ -114,6 +114,35 @@ resource "aws_iam_role_policy_attachment" "ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# Scoped narrowly to exactly the 2 buckets this role needs, and to exactly
+# the actions each one needs -- read+write receipts (the app uploads them),
+# read-only on deploy (the instance only ever downloads the bundle, never
+# writes to it).
+resource "aws_iam_role_policy" "s3_access" {
+  name = "${var.project_name}-app-s3-access"
+  role = aws_iam_role.app.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "ReceiptsReadWrite"
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:PutObject"]
+        Resource = [
+          "${aws_s3_bucket.receipts.arn}/*",
+        ]
+      },
+      {
+        Sid      = "DeployBundleReadOnly"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = "${aws_s3_bucket.deploy.arn}/*"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_instance_profile" "app" {
   name = "${var.project_name}-app-profile"
   role = aws_iam_role.app.name
