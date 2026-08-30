@@ -143,6 +143,21 @@ resource "aws_iam_role_policy" "s3_access" {
   })
 }
 
+resource "aws_iam_role_policy" "db_secret_access" {
+  name = "${var.project_name}-app-db-secret-access"
+  role = aws_iam_role.app.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "ReadDbSecret"
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = aws_secretsmanager_secret.db_credentials.arn
+    }]
+  })
+}
+
 resource "aws_iam_instance_profile" "app" {
   name = "${var.project_name}-app-profile"
   role = aws_iam_role.app.name
