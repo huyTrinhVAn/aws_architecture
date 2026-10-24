@@ -64,6 +64,15 @@ resource "aws_security_group" "app" {
     security_groups = [aws_security_group.alb.id]
   }
 
+  # DELIBERATELY BAD -- test PR to prove the policy gate blocks it. Never merge.
+  ingress {
+    description = "SSH from anywhere"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   # SSM, ssmmessages, ec2messages and Secrets Manager via the interface
   # endpoints. DNS (VPC resolver), IMDS and NTP use link-local addresses
   # that security groups never filter, so they need no rule here.
