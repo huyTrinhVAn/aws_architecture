@@ -21,6 +21,12 @@ resource "random_password" "db_master" {
 }
 
 resource "aws_db_instance" "this" {
+  #checkov:skip=CKV_AWS_157:Single-AZ for the lab; Multi-AZ roughly doubles cost. Required for any production database
+  #checkov:skip=CKV_AWS_293:Lab is destroyed after every session; deletion protection would block terraform destroy
+  #checkov:skip=CKV_AWS_161:App authenticates with a Secrets Manager-held password; IAM auth needs token-refresh code in the app -- revisit later
+  #checkov:skip=CKV_AWS_129:CloudWatch log exports deferred to roadmap Phase 5 (observability)
+  #checkov:skip=CKV_AWS_118:Enhanced monitoring costs extra; basic CloudWatch metrics are enough for the lab
+
   identifier     = "${var.project_name}-db"
   engine         = "mysql"
   engine_version = "8.0"
@@ -47,6 +53,11 @@ resource "aws_db_instance" "this" {
   deletion_protection = false
   skip_final_snapshot = true
 
+  # Both free: security patches land in the maintenance window without a
+  # manual step, and snapshots keep the Project tag for cost attribution.
+  auto_minor_version_upgrade = true
+  copy_tags_to_snapshot      = true
+
   tags = {
     Name    = "${var.project_name}-db"
     Project = var.project_name
@@ -54,6 +65,9 @@ resource "aws_db_instance" "this" {
 }
 
 resource "aws_secretsmanager_secret" "db_credentials" {
+  #checkov:skip=CKV_AWS_149:Encrypted with the AWS-managed aws/secretsmanager key; a customer-managed key adds $1/month + key-policy work
+  #checkov:skip=CKV2_AWS_57:Rotation needs a rotation Lambda plus app reconnect logic -- out of scope for the lab
+
   name = "${var.project_name}/db-credentials"
 
   tags = {

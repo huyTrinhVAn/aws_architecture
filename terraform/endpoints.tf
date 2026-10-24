@@ -8,7 +8,44 @@ resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.this.id
   service_name      = "com.amazonaws.${var.aws_region}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = [aws_route_table.app.id, aws_route_table.db.id]
+  # App tier only. The db tier never calls S3 itself (RDS backups travel
+  # over AWS's own network, not this VPC's route tables), so an S3 route in
+  # the db route table was only ever a way for data to leave.
+  route_table_ids = [aws_route_table.app.id]
+
+  # Without a policy, a gateway endpoint lets anything in the subnet reach
+  # *any* bucket in the region -- including one an attacker owns, which is
+  # an exfiltration path that needs no internet access at all. This is the
+  # network-layer half of the control; the app role's IAM policy in
+  # security.tf is the identity half, and a request needs both to allow it.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "ReceiptsReadWrite"
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = ["s3:GetObject", "s3:PutObject", "s3:AbortMultipartUpload"]
+        Resource  = "${aws_s3_bucket.receipts.arn}/*"
+      },
+      {
+        Sid       = "DeployBundleRead"
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = ["s3:GetObject"]
+        Resource  = "${aws_s3_bucket.deploy.arn}/*"
+      },
+      {
+        # AWS-operated bucket backing AL2023's dnf repos (user_data.sh.tftpl
+        # installs python3-pip from it at boot).
+        Sid       = "AmazonLinuxRepos"
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = ["s3:GetObject"]
+        Resource  = "arn:aws:s3:::al2023-repos-${var.aws_region}-de612dc2/*"
+      },
+    ]
+  })
 
   tags = {
     Name    = "${var.project_name}-s3-endpoint"
@@ -34,12 +71,9 @@ resource "aws_security_group" "vpc_endpoints" {
     cidr_blocks = [aws_vpc.this.cidr_block]
   }
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  # Endpoint ENIs only answer requests; replies are allowed by SG
+  # statefulness, so they never need to open a connection themselves.
+  egress = []
 
   tags = {
     Name    = "${var.project_name}-vpce-sg"
