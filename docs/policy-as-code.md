@@ -3,6 +3,27 @@
 Every change to `terraform/` is checked by two independent policy layers
 before it can reach AWS, and nothing is applied without a human approval.
 
+## In short
+
+**Terms**
+- **Policy as Code:** security and compliance rules written as code, versioned, reviewed and enforced automatically in CI, instead of living in a wiki or a reviewer's head.
+- **Checkov:** an open-source scanner with ~1,000 built-in rules. It reads `.tf` files and flags common misconfigurations.
+- **OPA (Open Policy Agent):** a general-purpose policy engine. **Rego** is its rule language.
+- **Conftest:** a CLI that runs Rego policies against config files. Here, against the Terraform plan JSON.
+
+**What I built**
+- Checkov runs on every PR. I triaged the first scan's 41 failures: fixed 16, and documented every remaining exception inline with a reason.
+- I wrote my own Rego policies, run on the plan JSON: only the ALB may face the internet (ports 80/443 only), no SSH/RDP from any source, encryption at rest, required tags. They have 21 unit tests.
+- Every PR gets a `terraform plan` posted as a comment, using a read-only OIDC role.
+- `apply` runs only after manual approval in a GitHub Environment. The AWS role trusts only that environment's OIDC claim, so AWS enforces the gate, not just the workflow file.
+- Branch protection makes all checks required. A test PR opening SSH to the internet was blocked by both layers.
+
+**How the two layers relate:** both are required checks, so a PR must pass **both**. Checkov gives breadth (generic rules I didn't have to write). Rego gives precision: my organisation's own rules, checked on the final plan values Terraform will actually create.
+
+**How to stop people bypassing the rules:** a `#checkov:skip` comment can silence Checkov, but not the Rego policies, which only change through `policy/`. In production I'd add `CODEOWNERS` so the security team must approve changes to `policy/` and any new skip.
+
+**Biggest finding:** following up an "open egress" warning on the database security group revealed that the S3 gateway endpoint had no policy and was routed to the db subnet. A compromised DB host could have copied data to *any* S3 bucket without internet access. I fixed it in depth: removed the route, added an endpoint policy and removed the db egress.
+
 ```
 PR opened ──► terraform-check   fmt + validate (no AWS access)
           ├─► checkov           ~1,000 built-in rules against the .tf files
