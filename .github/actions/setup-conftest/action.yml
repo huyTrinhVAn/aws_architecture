@@ -1,0 +1,20 @@
+name: Set up Conftest
+description: Install a pinned Conftest release and verify its checksum before running it
+
+runs:
+  using: composite
+  steps:
+    # Pinned version + SHA-256 from the release's checksums.txt: a policy
+    # gate is only as trustworthy as the binary enforcing it, so a tampered
+    # or swapped download fails here instead of silently passing every PR.
+    - shell: bash
+      env:
+        CONFTEST_VERSION: "0.71.1"
+        CONFTEST_SHA256: "c3f6b2a753bd56e377a1e51a95ae3e057f926f2e9139f7d5b5dfbbaf810f7985"
+      run: |
+        curl -sSfL -o /tmp/conftest.tar.gz \
+          "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+        echo "${CONFTEST_SHA256}  /tmp/conftest.tar.gz" | sha256sum -c -
+        tar -xzf /tmp/conftest.tar.gz -C /tmp conftest
+        sudo mv /tmp/conftest /usr/local/bin/conftest
+        conftest --version
