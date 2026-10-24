@@ -3,7 +3,15 @@
 # here ever opens port 22: instance access goes through SSM Session Manager
 # instead (IAM role below; the VPC endpoints it needs are added in Phase 3).
 
+# Egress is least-privilege too, not just ingress: each tier may only open
+# connections to the exact next hop it needs. Egress rules use CIDRs or
+# prefix lists rather than SG references where the target SG already
+# references this one (app <-> db, alb <-> app) -- two inline SGs pointing
+# at each other is a dependency cycle Terraform can't create.
+
 resource "aws_security_group" "alb" {
+  #checkov:skip=CKV_AWS_260:Internet-facing ALB -- accepting port 80 from anywhere is its job (and it's needed for the HTTP->HTTPS redirect)
+
   name        = "${var.project_name}-alb-sg"
   description = "Allow inbound HTTP/HTTPS from the internet"
   vpc_id      = aws_vpc.this.id
@@ -24,16 +32,22 @@ resource "aws_security_group" "alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # The ALB only ever talks to the app instances (requests + health checks).
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    description = "Forward requests and health checks to the app tier"
+    from_port   = var.app_port
+    to_port     = var.app_port
+    protocol    = "tcp"
+    cidr_blocks = var.app_subnet_cidrs
   }
 
   tags = {
     Name    = "${var.project_name}-alb-sg"
     Project = var.project_name
+    # Read by policy/security_groups.rego: the only SG allowed to accept
+    # 0.0.0.0/0, and even then only on 80/443. Any other SG opening itself
+    # to the internet fails the PR.
+    Exposure = "internet-facing"
   }
 }
 
@@ -50,11 +64,33 @@ resource "aws_security_group" "app" {
     security_groups = [aws_security_group.alb.id]
   }
 
+  # SSM, ssmmessages, ec2messages and Secrets Manager via the interface
+  # endpoints. DNS (VPC resolver), IMDS and NTP use link-local addresses
+  # that security groups never filter, so they need no rule here.
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    description     = "HTTPS to interface VPC endpoints"
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    security_groups = [aws_security_group.vpc_endpoints.id]
+  }
+
+  # Receipts/deploy buckets and the AL2023 dnf repos, through the S3
+  # gateway endpoint -- its prefix list is S3's regional IP ranges.
+  egress {
+    description     = "HTTPS to S3 via the gateway endpoint"
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    prefix_list_ids = [aws_vpc_endpoint.s3.prefix_list_id]
+  }
+
+  egress {
+    description = "MySQL to the db tier"
+    from_port   = var.db_port
+    to_port     = var.db_port
+    protocol    = "tcp"
+    cidr_blocks = var.db_subnet_cidrs
   }
 
   tags = {
@@ -76,12 +112,11 @@ resource "aws_security_group" "db" {
     security_groups = [aws_security_group.app.id]
   }
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  # No egress at all: RDS only answers connections, it never opens them,
+  # and SGs are stateful so replies to the app tier still flow. `egress =
+  # []` (not just deleting the block) is what makes Terraform actually
+  # remove AWS's default allow-all rule from an existing group.
+  egress = []
 
   tags = {
     Name    = "${var.project_name}-db-sg"

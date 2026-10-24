@@ -33,6 +33,8 @@ variable "db_subnet_cidrs" {
 }
 
 resource "aws_vpc" "this" {
+  #checkov:skip=CKV2_AWS_11:Flow Logs are scheduled for roadmap Phase 5 (observability), together with their retention/cost decision
+
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
@@ -40,6 +42,19 @@ resource "aws_vpc" "this" {
   tags = {
     Name    = "${var.project_name}-vpc"
     Project = var.project_name
+  }
+}
+
+# AWS creates a "default" security group in every VPC that allows all
+# traffic between its members plus all egress. Nothing here uses it, but
+# anything launched without an explicit SG silently lands in it. Adopting
+# it with no ingress/egress blocks makes Terraform strip every rule, so
+# that silent fallback means "no traffic at all" instead.
+resource "aws_default_security_group" "default" {
+  vpc_id = aws_vpc.this.id
+
+  tags = {
+    Name = "${var.project_name}-default-sg-locked"
   }
 }
 
@@ -55,11 +70,15 @@ resource "aws_internet_gateway" "this" {
 # --- Subnets ---------------------------------------------------------------
 
 resource "aws_subnet" "public" {
-  count                   = length(var.azs)
-  vpc_id                  = aws_vpc.this.id
-  cidr_block              = var.public_subnet_cidrs[count.index]
-  availability_zone       = var.azs[count.index]
-  map_public_ip_on_launch = true
+  count             = length(var.azs)
+  vpc_id            = aws_vpc.this.id
+  cidr_block        = var.public_subnet_cidrs[count.index]
+  availability_zone = var.azs[count.index]
+  # Only the ALB lives here, and it gets its public IPs from the load
+  # balancer service itself, not from this setting -- leaving it on would
+  # only matter for an instance launched here by mistake, giving it a
+  # public IP nobody asked for.
+  map_public_ip_on_launch = false
 
   tags = {
     Name    = "${var.project_name}-public-${var.azs[count.index]}"
