@@ -12,6 +12,12 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
+# Saved plans hold secret values (e.g. the DB password) in plaintext
+tfplan
+*.tfplan
+plan.json
+plan.txt
+conftest.txt
 
 # Python
 __pycache__/

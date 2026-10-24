@@ -17,9 +17,10 @@ resource "aws_iam_openid_connect_provider" "github" {
   }
 }
 
-# Scoped to this exact repo AND branch -- a workflow run on a fork, a PR
-# branch, or any other repo cannot assume this role, only a run whose
-# checked-out ref is refs/heads/main on huyTrinhVAn/aws_architecture.
+# Scoped to this exact repo: runs on main, plus pull_request runs so every
+# PR gets a plan to review. Safe to open to PRs because the role is
+# read-only, and GitHub never issues an OIDC token to a pull_request run
+# triggered from a fork -- only branches pushed to this repo get one.
 resource "aws_iam_role" "github_actions_ci" {
   name = "${var.project_name}-github-actions-ci"
 
@@ -41,7 +42,10 @@ resource "aws_iam_role" "github_actions_ci" {
           # the ID portions since they add no security value here (this
           # role is already scoped to one specific role ARN) and pinning
           # them would silently break if GitHub ever changes the ID.
-          "token.actions.githubusercontent.com:sub" = "repo:huyTrinhVAn@*/aws_architecture@*:ref:refs/heads/main"
+          "token.actions.githubusercontent.com:sub" = [
+            "repo:huyTrinhVAn@*/aws_architecture@*:ref:refs/heads/main",
+            "repo:huyTrinhVAn@*/aws_architecture@*:pull_request",
+          ]
         }
       }
     }]
@@ -54,8 +58,9 @@ resource "aws_iam_role" "github_actions_ci" {
 }
 
 # Read-only is sufficient for `terraform plan` (it only describes existing
-# resources to compute a diff) -- CI is deliberately not granted anything
-# that could mutate the account. `apply` stays a manual, local action.
+# resources to compute a diff) -- this role is deliberately not granted
+# anything that could mutate the account. `apply` uses the separate,
+# approval-gated github_actions_apply role below.
 resource "aws_iam_role_policy_attachment" "github_actions_ci_readonly" {
   role       = aws_iam_role.github_actions_ci.name
   policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
@@ -135,4 +140,51 @@ resource "aws_iam_role_policy" "github_actions_deploy_s3" {
 
 output "github_actions_deploy_role_arn" {
   value = aws_iam_role.github_actions_deploy.arn
+}
+
+# `terraform apply` from CI. The trust policy matches ONLY the
+# `environment:production` sub claim, which GitHub issues only to a job
+# that declares `environment: production` -- and that job can't start
+# until a required reviewer approves it in the GitHub UI. So the approval
+# gate is enforced by AWS, not just by the workflow file: a modified
+# workflow that skips the environment simply can't assume this role.
+resource "aws_iam_role" "github_actions_apply" {
+  name = "${var.project_name}-github-actions-apply"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Federated = aws_iam_openid_connect_provider.github.arn }
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+        }
+        StringLike = {
+          "token.actions.githubusercontent.com:sub" = "repo:huyTrinhVAn@*/aws_architecture@*:environment:production"
+        }
+      }
+    }]
+  })
+
+  tags = {
+    Name = "${var.project_name}-github-actions-apply"
+  }
+}
+
+# Terraform here manages IAM roles, VPCs, RDS, ALBs... so apply genuinely
+# needs near-admin rights. The controls are around *who can use* the role
+# (trust policy + environment approval above), not inside it. Next step
+# for a production setup: a permissions boundary that blocks IAM changes
+# outside the project's own role names.
+resource "aws_iam_role_policy_attachment" "github_actions_apply_admin" {
+  #checkov:skip=CKV_AWS_274:Apply role must create IAM/VPC/RDS resources; access is gated by the environment-scoped trust policy + manual approval
+
+  role       = aws_iam_role.github_actions_apply.name
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+}
+
+output "github_actions_apply_role_arn" {
+  value = aws_iam_role.github_actions_apply.arn
 }

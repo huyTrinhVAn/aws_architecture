@@ -1,0 +1,11 @@
+# Shared by local runs and CI, so both scan exactly the same thing:
+#   checkov --config-file .checkov.yaml
+# Accepted risks and false positives are NOT skipped here globally --
+# each one is an inline `#checkov:skip=ID:reason` on the resource it
+# applies to, so the justification is reviewed in the same PR as the code.
+directory:
+  - terraform
+framework:
+  - terraform
+compact: true
+quiet: true

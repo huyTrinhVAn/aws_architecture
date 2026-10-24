@@ -23,24 +23,63 @@ jobs:
 
       # No AWS credentials here on purpose -- this only checks that the
       # config is syntactically valid and internally consistent, it never
-      # talks to a real AWS account (no plan/apply in CI yet).
+      # talks to a real AWS account.
       - name: terraform init (no backend, no AWS calls)
         run: terraform init -backend=false
 
       - name: terraform validate
         run: terraform validate
 
-  # Only runs on pushes to main -- the IAM role's trust policy is scoped to
-  # ref:refs/heads/main, so a pull_request run (different sub claim, and
-  # possibly from a fork) could not assume it anyway even if this ran.
+  # Static scan of the .tf files against Checkov's built-in rules. Any
+  # failed check fails the job (Checkov exits non-zero), which blocks the
+  # PR. Accepted risks are skipped inline on the resource, with a reason,
+  # so every exception is reviewed like any other code change.
+  checkov:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Checkov
+        run: pip install checkov==3.3.30
+
+      - name: Checkov scan
+        run: checkov --config-file .checkov.yaml
+
+  # The custom Rego policies are code too: formatted, and unit-tested
+  # against hand-written plans (including deliberately bad ones) before
+  # they're trusted to gate real plans.
+  policy-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-conftest
+
+      - name: Rego format check
+        run: conftest fmt --check policy
+
+      - name: Policy unit tests
+        run: conftest verify --policy policy
+
+  # Plans on every PR (and on main), runs the custom policies against the
+  # plan JSON, and posts the plan as a PR comment for review. Uses the
+  # read-only CI role. Fork PRs are skipped: GitHub never issues them an
+  # OIDC token, so they couldn't assume the role anyway.
   terraform-plan:
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: terraform-check
     runs-on: ubuntu-latest
     permissions:
       id-token: write # required to request the OIDC token
       contents: read
+      pull-requests: write # to post the plan comment
     defaults:
       run:
+        shell: bash # explicit shell turns on pipefail, so `| tee` can't hide a failure
         working-directory: terraform
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +87,9 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.15.8"
+          terraform_wrapper: false # raw stdout, so `terraform show -json > file` is clean JSON
+
+      - uses: ./.github/actions/setup-conftest
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -55,17 +97,140 @@ jobs:
           aws-region: us-east-1
 
       - name: terraform init
-        run: terraform init
+        run: terraform init -input=false
 
       # -refresh=false on purpose: a full refresh needs to read every
       # resource's live value, and for aws_secretsmanager_secret_version
       # that Read *is* a secretsmanager:GetSecretValue call. Granting the
       # read-only CI role permission to read actual secret contents would
       # undercut the whole point of keeping it read-only. Trade-off: this
-      # plan reflects state as of the last local `apply`, not a live
-      # re-check of every resource.
+      # plan reflects state as of the last apply, not a live re-check of
+      # every resource. -lock-timeout waits out a concurrent PR/main plan
+      # holding the state lock instead of failing immediately.
       - name: terraform plan
-        run: terraform plan -no-color -refresh=false
+        id: plan
+        run: terraform plan -input=false -no-color -refresh=false -lock-timeout=5m -out=tfplan
+
+      - name: Render plan
+        run: |
+          terraform show -no-color tfplan > plan.txt
+          terraform show -json tfplan > plan.json
+
+      - name: Policy check (Conftest)
+        run: conftest test plan.json --policy ../policy --all-namespaces --no-color | tee conftest.txt
+
+      # always(): the comment is posted even when the policy check fails,
+      # so the author sees both the plan and exactly which policy denied it.
+      # Updates one comment per PR instead of adding a new one every push.
+      - name: Comment plan on PR
+        if: always() && github.event_name == 'pull_request' && steps.plan.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- terraform-plan-comment -->';
+            const read = (path) => fs.existsSync(path) ? fs.readFileSync(path, 'utf8') : '(not run)';
+
+            const plan = read('terraform/plan.txt');
+            const policy = read('terraform/conftest.txt');
+            const summary = (plan.match(/^(Plan:.*|No changes\..*)$/m) || ['(no summary line)'])[0];
+
+            const maxPlan = 55000; // GitHub comments cap at 65,536 characters
+            const planBody = plan.length > maxPlan
+              ? plan.slice(0, maxPlan) + '\n... (truncated, see the job log for the full plan)'
+              : plan;
+
+            const body = [
+              marker,
+              '### Terraform plan',
+              `**${summary}**`,
+              '',
+              '#### Policy check (Conftest)',
+              '```',
+              policy.trim(),
+              '```',
+              '',
+              '<details><summary>Full plan</summary>',
+              '',
+              '```',
+              planBody,
+              '```',
+              '</details>',
+              '',
+              `_Commit ${context.sha.slice(0, 7)}, run [#${context.runNumber}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})_`,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              ...context.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const existing = comments.find((c) => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
+            }
+
+  # Applies main to AWS, but only after a human approves the run: the job
+  # targets the "production" GitHub Environment, which has a required
+  # reviewer. The apply role's trust policy only accepts the
+  # environment:production OIDC claim, so AWS itself refuses any job that
+  # didn't go through that gate.
+  #
+  # Off until ENABLE_TERRAFORM_APPLY=true is set as a repo variable --
+  # referencing an environment that doesn't exist yet makes GitHub
+  # silently create it *without* protection rules, so the switch is only
+  # flipped once the environment's reviewer is configured.
+  terraform-apply:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ENABLE_TERRAFORM_APPLY == 'true'
+    needs: [terraform-check, checkov, policy-tests, terraform-plan]
+    runs-on: ubuntu-latest
+    environment: production
+    # Never cancel an apply halfway; queue the next one behind it instead.
+    concurrency:
+      group: terraform-apply
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        shell: bash
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - uses: ./.github/actions/setup-conftest
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::197285016437:role/sa-portfolio-github-actions-apply
+          aws-region: us-east-1
+
+      - name: terraform init
+        run: terraform init -input=false
+
+      # A fresh plan rather than the PR job's plan file: a saved plan holds
+      # secret values (the DB password) in plaintext, and workflow artifacts
+      # are readable by anyone with read access to the repo. Re-running the
+      # policy check below means the exact plan being applied is gated too.
+      - name: terraform plan
+        run: terraform plan -input=false -no-color -lock-timeout=5m -out=tfplan
+
+      - name: Policy check (Conftest)
+        run: |
+          terraform show -json tfplan > plan.json
+          conftest test plan.json --policy ../policy --all-namespaces --no-color
+
+      - name: terraform apply
+        run: terraform apply -input=false -no-color tfplan
 
   app-tests:
     runs-on: ubuntu-latest
