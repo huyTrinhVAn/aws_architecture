@@ -138,6 +138,26 @@ resource "aws_iam_role_policy" "github_actions_deploy_s3" {
   })
 }
 
+# Instances only fetch the bundle at boot (user_data), so uploading a new
+# one changes nothing until they're replaced. An instance refresh replaces
+# them one at a time behind the ALB -- a rolling deploy with no downtime.
+# Scoped to this one ASG; the role still can't launch, terminate or
+# resize anything directly.
+resource "aws_iam_role_policy" "github_actions_deploy_refresh" {
+  name = "${var.project_name}-github-actions-deploy-refresh"
+  role = aws_iam_role.github_actions_deploy.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "RollOutNewBundle"
+      Effect   = "Allow"
+      Action   = ["autoscaling:StartInstanceRefresh"]
+      Resource = aws_autoscaling_group.app.arn
+    }]
+  })
+}
+
 output "github_actions_deploy_role_arn" {
   value = aws_iam_role.github_actions_deploy.arn
 }

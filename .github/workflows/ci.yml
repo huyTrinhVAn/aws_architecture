@@ -256,9 +256,14 @@ jobs:
   # doesn't need to run on the target architecture -- it just fetches
   # prebuilt wheels matching --platform from PyPI's index, so this works
   # fine on the runner's own x86_64 Linux even though EC2 runs ARM64.
+  #
+  # Runs only after terraform-apply succeeds: the deploy bucket, the deploy
+  # role and the ASG only exist once the stack is applied. When apply is
+  # skipped (switch off) or rejected, this job is skipped too instead of
+  # failing against infrastructure that isn't there.
   build-and-deploy-app:
     if: github.ref == 'refs/heads/main'
-    needs: app-tests
+    needs: [app-tests, terraform-apply]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -292,5 +297,18 @@ jobs:
           role-to-assume: arn:aws:iam::197285016437:role/sa-portfolio-github-actions-deploy
           aws-region: us-east-1
 
+      # Bucket name is sa-portfolio-deploy-<account id>, see terraform/storage.tf.
       - name: Upload bundle to S3
-        run: aws s3 cp bundle.zip s3://sa-portfolio-deploy-57440759/bundle.zip
+        run: aws s3 cp bundle.zip s3://sa-portfolio-deploy-197285016437/bundle.zip
+
+      # Instances only read the bundle at boot, so replace them to pick up
+      # the new one. MinHealthyPercentage=50 with 2 instances means one is
+      # replaced at a time while the other keeps serving; InstanceWarmup
+      # covers user_data's dnf/pip install before the next one is touched.
+      # The refresh runs asynchronously -- follow it in the EC2 console
+      # under Auto Scaling groups -> Instance refresh.
+      - name: Roll out the new bundle (instance refresh)
+        run: |
+          aws autoscaling start-instance-refresh \
+            --auto-scaling-group-name sa-portfolio-asg \
+            --preferences '{"MinHealthyPercentage": 50, "InstanceWarmup": 180}'

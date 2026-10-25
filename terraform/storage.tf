@@ -83,6 +83,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "receipts" {
 # an instance with no internet access). No versioning or storage tiering
 # needed -- only the latest bundle matters, and it's small.
 
+data "aws_caller_identity" "current" {}
+
 resource "aws_s3_bucket" "deploy" {
   #checkov:skip=CKV_AWS_21:Only the latest bundle matters and CI rebuilds it on every push to main -- versioning would only keep stale copies
   #checkov:skip=CKV_AWS_145:SSE-S3 (AES256) is enough for a build artifact with no business data
@@ -90,7 +92,12 @@ resource "aws_s3_bucket" "deploy" {
   #checkov:skip=CKV_AWS_144:Cross-region replication doubles storage cost; single-region lab
   #checkov:skip=CKV2_AWS_62:No consumer for S3 event notifications exists -- nothing to notify
 
-  bucket = "${var.project_name}-deploy-${random_id.bucket_suffix.hex}"
+  # Named after the account ID rather than the random suffix the receipts
+  # bucket uses: CI has to know this name to upload the bundle, and a
+  # random suffix changed every time the stack was destroyed and
+  # re-created, silently breaking the hard-coded name in the workflow.
+  # Account IDs are unique, so the name is still globally unique.
+  bucket = "${var.project_name}-deploy-${data.aws_caller_identity.current.account_id}"
 
   tags = {
     Name    = "${var.project_name}-deploy"
