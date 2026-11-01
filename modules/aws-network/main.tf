@@ -1,35 +1,20 @@
-# Phase 1: VPC, 3-tier subnets (public / app / db) across 2 AZs, and their
-# route tables. The app and db route tables intentionally get no default
-# route yet — Phase 3 replaces a NAT Gateway with VPC Endpoints instead.
+# VPC, 3-tier subnets (public / app / db) across the given AZs, their route
+# tables, and the VPC endpoints that replace a NAT Gateway. The app and db
+# route tables get no default route: app instances reach AWS services
+# through the endpoints, and the db tier reaches nothing at all.
 
-variable "vpc_cidr" {
-  description = "CIDR block for the VPC"
-  type        = string
-  default     = "10.0.0.0/16"
-}
-
-variable "azs" {
-  description = "Availability zones to spread subnets across"
-  type        = list(string)
-  default     = ["us-east-1a", "us-east-1b"]
-}
-
-variable "public_subnet_cidrs" {
-  description = "CIDR blocks for public subnets (one per AZ, same order as var.azs)"
-  type        = list(string)
-  default     = ["10.0.0.0/24", "10.0.1.0/24"]
-}
-
-variable "app_subnet_cidrs" {
-  description = "CIDR blocks for private app subnets (one per AZ, same order as var.azs)"
-  type        = list(string)
-  default     = ["10.0.10.0/24", "10.0.11.0/24"]
-}
-
-variable "db_subnet_cidrs" {
-  description = "CIDR blocks for private db subnets (one per AZ, same order as var.azs)"
-  type        = list(string)
-  default     = ["10.0.20.0/24", "10.0.21.0/24"]
+locals {
+  # Subnets are keyed by AZ, not by list index. With count, removing the
+  # first AZ would shift every remaining index down by one, and Terraform
+  # would destroy and re-create the subnets in the AZs that stayed. With
+  # for_each, only the removed AZ's subnets are touched.
+  subnets = {
+    for index, az in var.azs : az => {
+      public = var.public_subnet_cidrs[index]
+      app    = var.app_subnet_cidrs[index]
+      db     = var.db_subnet_cidrs[index]
+    }
+  }
 }
 
 resource "aws_vpc" "this" {
@@ -70,10 +55,10 @@ resource "aws_internet_gateway" "this" {
 # --- Subnets ---------------------------------------------------------------
 
 resource "aws_subnet" "public" {
-  count             = length(var.azs)
+  for_each          = local.subnets
   vpc_id            = aws_vpc.this.id
-  cidr_block        = var.public_subnet_cidrs[count.index]
-  availability_zone = var.azs[count.index]
+  cidr_block        = each.value.public
+  availability_zone = each.key
   # Only the ALB lives here, and it gets its public IPs from the load
   # balancer service itself, not from this setting -- leaving it on would
   # only matter for an instance launched here by mistake, giving it a
@@ -81,33 +66,33 @@ resource "aws_subnet" "public" {
   map_public_ip_on_launch = false
 
   tags = {
-    Name    = "${var.project_name}-public-${var.azs[count.index]}"
+    Name    = "${var.project_name}-public-${each.key}"
     Project = var.project_name
     Tier    = "public"
   }
 }
 
 resource "aws_subnet" "app" {
-  count             = length(var.azs)
+  for_each          = local.subnets
   vpc_id            = aws_vpc.this.id
-  cidr_block        = var.app_subnet_cidrs[count.index]
-  availability_zone = var.azs[count.index]
+  cidr_block        = each.value.app
+  availability_zone = each.key
 
   tags = {
-    Name    = "${var.project_name}-app-${var.azs[count.index]}"
+    Name    = "${var.project_name}-app-${each.key}"
     Project = var.project_name
     Tier    = "app"
   }
 }
 
 resource "aws_subnet" "db" {
-  count             = length(var.azs)
+  for_each          = local.subnets
   vpc_id            = aws_vpc.this.id
-  cidr_block        = var.db_subnet_cidrs[count.index]
-  availability_zone = var.azs[count.index]
+  cidr_block        = each.value.db
+  availability_zone = each.key
 
   tags = {
-    Name    = "${var.project_name}-db-${var.azs[count.index]}"
+    Name    = "${var.project_name}-db-${each.key}"
     Project = var.project_name
     Tier    = "db"
   }
@@ -130,13 +115,13 @@ resource "aws_route_table" "public" {
 }
 
 resource "aws_route_table_association" "public" {
-  count          = length(var.azs)
-  subnet_id      = aws_subnet.public[count.index].id
+  for_each       = aws_subnet.public
+  subnet_id      = each.value.id
   route_table_id = aws_route_table.public.id
 }
 
-# No route out yet — app instances will reach AWS services via VPC
-# Endpoints added in Phase 3, not a NAT Gateway.
+# No default route -- app instances reach AWS services through the VPC
+# endpoints below, not a NAT Gateway.
 resource "aws_route_table" "app" {
   vpc_id = aws_vpc.this.id
 
@@ -147,8 +132,8 @@ resource "aws_route_table" "app" {
 }
 
 resource "aws_route_table_association" "app" {
-  count          = length(var.azs)
-  subnet_id      = aws_subnet.app[count.index].id
+  for_each       = aws_subnet.app
+  subnet_id      = each.value.id
   route_table_id = aws_route_table.app.id
 }
 
@@ -163,7 +148,7 @@ resource "aws_route_table" "db" {
 }
 
 resource "aws_route_table_association" "db" {
-  count          = length(var.azs)
-  subnet_id      = aws_subnet.db[count.index].id
+  for_each       = aws_subnet.db
+  subnet_id      = each.value.id
   route_table_id = aws_route_table.db.id
 }
