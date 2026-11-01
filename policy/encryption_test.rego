@@ -57,3 +57,58 @@ test_counted_bucket_matched_by_base_address if {
 	inp := plan([resource("aws_s3_bucket", "aws_s3_bucket.logs[0]", {})], [sse_config("logs")])
 	count(encryption.deny) == 0 with input as inp
 }
+
+# Buckets inside modules: the Phase 2 refactor moved every bucket into
+# module.storage, and the first version of this policy only looked at the
+# root module -- it silently passed a module bucket with no encryption.
+
+module_plan(resources, module_name, config) := {
+	"resource_changes": resources,
+	"configuration": {"root_module": {
+		"resources": [],
+		"module_calls": {module_name: {"module": {"resources": config}}},
+	}},
+}
+
+test_module_bucket_with_sse_config_allowed if {
+	inp := module_plan(
+		[resource("aws_s3_bucket", "module.storage.aws_s3_bucket.receipts", {})],
+		"storage", [sse_config("receipts")],
+	)
+	count(encryption.deny) == 0 with input as inp
+}
+
+test_module_bucket_without_sse_config_denied if {
+	inp := module_plan(
+		[resource("aws_s3_bucket", "module.storage.aws_s3_bucket.deploy", {})],
+		"storage", [sse_config("receipts")],
+	)
+	some msg in encryption.deny with input as inp
+	contains(msg, "module.storage.aws_s3_bucket.deploy")
+}
+
+test_same_bucket_name_in_other_module_does_not_count if {
+	# an SSE config for aws_s3_bucket.deploy in module.other must not
+	# satisfy module.storage's aws_s3_bucket.deploy
+	inp := module_plan(
+		[resource("aws_s3_bucket", "module.storage.aws_s3_bucket.deploy", {})],
+		"other", [sse_config("deploy")],
+	)
+	count(encryption.deny) == 1 with input as inp
+}
+
+test_nested_module_bucket_allowed if {
+	inp := {
+		"resource_changes": [resource("aws_s3_bucket", "module.app.module.logs.aws_s3_bucket.this", {})],
+		"configuration": {"root_module": {"module_calls": {"app": {"module": {"module_calls": {"logs": {"module": {"resources": [sse_config("this")]}}}}}}}},
+	}
+	count(encryption.deny) == 0 with input as inp
+}
+
+test_for_each_module_instance_matched if {
+	inp := module_plan(
+		[resource("aws_s3_bucket", `module.storage["eu"].aws_s3_bucket.receipts`, {})],
+		"storage", [sse_config("receipts")],
+	)
+	count(encryption.deny) == 0 with input as inp
+}
