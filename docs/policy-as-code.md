@@ -1,6 +1,6 @@
 # Policy as Code
 
-Every change to `terraform/` is checked by two independent policy layers
+Every change to the Terraform code (`envs/`, `modules/`) is checked by two independent policy layers
 before it can reach AWS, and nothing is applied without a human approval.
 
 ## In short
@@ -65,10 +65,10 @@ Run locally:
 ```powershell
 .\.venv\Scripts\python.exe -m checkov.main --config-file .checkov.yaml
 conftest verify --policy policy
-cd terraform
+cd envs/aws-dev
 terraform plan -out=tfplan
 terraform show -json tfplan > plan.json
-conftest test plan.json --policy ../policy --all-namespaces
+conftest test plan.json --policy ../../policy --all-namespaces
 ```
 
 On Windows, call Checkov as `python -m checkov.main` from the venv: the
@@ -171,14 +171,14 @@ check runs again on the exact plan being applied.
    don't exist yet, so this first apply is local, with your admin
    credentials:
    ```powershell
-   cd terraform
+   cd envs/aws-dev
    terraform apply `
-     -target="aws_iam_openid_connect_provider.github" `
-     -target="aws_iam_role.github_actions_ci" `
-     -target="aws_iam_role_policy_attachment.github_actions_ci_readonly" `
-     -target="aws_iam_role_policy.github_actions_ci_state_lock" `
-     -target="aws_iam_role.github_actions_apply" `
-     -target="aws_iam_role_policy_attachment.github_actions_apply_admin"
+     -target="module.github_oidc.aws_iam_openid_connect_provider.github" `
+     -target="module.github_oidc.aws_iam_role.ci" `
+     -target="module.github_oidc.aws_iam_role_policy_attachment.ci_readonly" `
+     -target="module.github_oidc.aws_iam_role_policy.ci_state_lock" `
+     -target="module.github_oidc.aws_iam_role.apply" `
+     -target="module.github_oidc.aws_iam_role_policy_attachment.apply_admin"
    ```
 2. **GitHub → Settings → Environments → New environment** `production`:
    - Required reviewers: yourself. This is free on public repos; private repos need a paid plan.
