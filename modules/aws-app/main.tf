@@ -1,4 +1,4 @@
-# Phase 4: ALB + Auto Scaling Group hosting the app tier, with a Spot/
+# ALB + Auto Scaling Group hosting the app tier, with a Spot/
 # On-Demand mix on Graviton (t4g) instances.
 
 data "aws_ami" "al2023_arm" {
@@ -19,7 +19,7 @@ data "aws_ami" "al2023_arm" {
 resource "aws_launch_template" "app" {
   name_prefix   = "${var.project_name}-app-"
   image_id      = data.aws_ami.al2023_arm.id
-  instance_type = "t4g.micro"
+  instance_type = var.instance_type
 
   iam_instance_profile {
     arn = aws_iam_instance_profile.app.arn
@@ -37,9 +37,9 @@ resource "aws_launch_template" "app" {
   user_data = base64encode(templatefile("${path.module}/user_data.sh.tftpl", {
     app_port        = var.app_port
     aws_region      = var.aws_region
-    deploy_bucket   = aws_s3_bucket.deploy.bucket
-    receipts_bucket = aws_s3_bucket.receipts.bucket
-    secret_arn      = aws_secretsmanager_secret.db_credentials.arn
+    deploy_bucket   = var.deploy_bucket_name
+    receipts_bucket = var.receipts_bucket_name
+    secret_arn      = var.db_credentials_secret_arn
   }))
 
   tag_specifications {
@@ -61,7 +61,7 @@ resource "aws_lb" "this" {
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
-  subnets            = aws_subnet.public[*].id
+  subnets            = var.public_subnet_ids
 
   # Drop requests with malformed header names instead of forwarding them
   # to the app -- closes off HTTP request-smuggling tricks at the edge.
@@ -79,7 +79,7 @@ resource "aws_lb_target_group" "app" {
   name     = "${var.project_name}-tg"
   port     = var.app_port
   protocol = "HTTP"
-  vpc_id   = aws_vpc.this.id
+  vpc_id   = var.vpc_id
 
   health_check {
     path                = "/health"
@@ -111,14 +111,14 @@ resource "aws_lb_listener" "http" {
 
 resource "aws_autoscaling_group" "app" {
   name                      = "${var.project_name}-asg"
-  vpc_zone_identifier       = aws_subnet.app[*].id
+  vpc_zone_identifier       = var.app_subnet_ids
   target_group_arns         = [aws_lb_target_group.app.arn]
   health_check_type         = "ELB"
   health_check_grace_period = 60
 
-  min_size         = 1
-  max_size         = 3
-  desired_capacity = 2
+  min_size         = var.min_size
+  max_size         = var.max_size
+  desired_capacity = var.desired_capacity
 
   # A guaranteed On-Demand baseline of 1, with all capacity above that
   # filled by Spot -- acceptable because the app tier is stateless (state

@@ -10,16 +10,19 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: terraform
+        working-directory: envs/aws-dev
     steps:
       - uses: actions/checkout@v4
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.15.8" # keep in sync with required_version in terraform/versions.tf
+          terraform_version: "1.15.8" # keep in sync with required_version in envs/aws-dev/versions.tf
 
+      # From the repo root, so the shared modules are format-checked too,
+      # not just the environment that calls them.
       - name: terraform fmt
-        run: terraform fmt -check -recursive
+        working-directory: .
+        run: terraform fmt -check -recursive envs modules
 
       # No AWS credentials here on purpose -- this only checks that the
       # config is syntactically valid and internally consistent, it never
@@ -80,7 +83,7 @@ jobs:
     defaults:
       run:
         shell: bash # explicit shell turns on pipefail, so `| tee` can't hide a failure
-        working-directory: terraform
+        working-directory: envs/aws-dev
     steps:
       - uses: actions/checkout@v4
 
@@ -117,7 +120,7 @@ jobs:
           terraform show -json tfplan > plan.json
 
       - name: Policy check (Conftest)
-        run: conftest test plan.json --policy ../policy --all-namespaces --no-color | tee conftest.txt
+        run: conftest test plan.json --policy ../../policy --all-namespaces --no-color | tee conftest.txt
 
       # always(): the comment is posted even when the policy check fails,
       # so the author sees both the plan and exactly which policy denied it.
@@ -131,8 +134,8 @@ jobs:
             const marker = '<!-- terraform-plan-comment -->';
             const read = (path) => fs.existsSync(path) ? fs.readFileSync(path, 'utf8') : '(not run)';
 
-            const plan = read('terraform/plan.txt');
-            const policy = read('terraform/conftest.txt');
+            const plan = read('envs/aws-dev/plan.txt');
+            const policy = read('envs/aws-dev/conftest.txt');
             const summary = (plan.match(/^(Plan:.*|No changes\..*)$/m) || ['(no summary line)'])[0];
 
             const maxPlan = 55000; // GitHub comments cap at 65,536 characters
@@ -198,7 +201,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: terraform
+        working-directory: envs/aws-dev
     steps:
       - uses: actions/checkout@v4
 
@@ -227,7 +230,7 @@ jobs:
       - name: Policy check (Conftest)
         run: |
           terraform show -json tfplan > plan.json
-          conftest test plan.json --policy ../policy --all-namespaces --no-color
+          conftest test plan.json --policy ../../policy --all-namespaces --no-color
 
       - name: terraform apply
         run: terraform apply -input=false -no-color tfplan
@@ -297,7 +300,7 @@ jobs:
           role-to-assume: arn:aws:iam::197285016437:role/sa-portfolio-github-actions-deploy
           aws-region: us-east-1
 
-      # Bucket name is sa-portfolio-deploy-<account id>, see terraform/storage.tf.
+      # Bucket name is sa-portfolio-deploy-<account id>, see modules/aws-storage/main.tf.
       - name: Upload bundle to S3
         run: aws s3 cp bundle.zip s3://sa-portfolio-deploy-197285016437/bundle.zip
 

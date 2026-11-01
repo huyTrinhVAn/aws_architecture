@@ -3,8 +3,13 @@
 # Accepted risks and false positives are NOT skipped here globally --
 # each one is an inline `#checkov:skip=ID:reason` on the resource it
 # applies to, so the justification is reviewed in the same PR as the code.
+#
+# envs/ is scanned with real input values (Checkov follows the module
+# calls); modules/ is scanned on its own too, so a module no environment
+# uses yet is still checked before anyone adopts it.
 directory:
-  - terraform
+  - envs
+  - modules
 framework:
   - terraform
 compact: true

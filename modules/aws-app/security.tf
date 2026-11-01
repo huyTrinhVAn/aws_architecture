@@ -1,7 +1,6 @@
-# Phase 2: security groups chained by tier (alb -> app -> db), each only
-# trusting the tier directly in front of it — never a broad CIDR. No rule
-# here ever opens port 22: instance access goes through SSM Session Manager
-# instead (IAM role below; the VPC endpoints it needs are added in Phase 3).
+# Security groups chained by tier (alb -> app -> db), each only trusting
+# the tier directly in front of it — never a broad CIDR. No rule here ever
+# opens port 22: instance access goes through SSM Session Manager instead.
 
 # Egress is least-privilege too, not just ingress: each tier may only open
 # connections to the exact next hop it needs. Egress rules use CIDRs or
@@ -14,7 +13,7 @@ resource "aws_security_group" "alb" {
 
   name        = "${var.project_name}-alb-sg"
   description = "Allow inbound HTTP/HTTPS from the internet"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = var.vpc_id
 
   ingress {
     description = "HTTP"
@@ -54,7 +53,7 @@ resource "aws_security_group" "alb" {
 resource "aws_security_group" "app" {
   name        = "${var.project_name}-app-sg"
   description = "Allow inbound app traffic from the ALB only"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = var.vpc_id
 
   ingress {
     description     = "App port from ALB"
@@ -72,7 +71,7 @@ resource "aws_security_group" "app" {
     from_port       = 443
     to_port         = 443
     protocol        = "tcp"
-    security_groups = [aws_security_group.vpc_endpoints.id]
+    security_groups = [var.vpc_endpoints_security_group_id]
   }
 
   # Receipts/deploy buckets and the AL2023 dnf repos, through the S3
@@ -82,7 +81,7 @@ resource "aws_security_group" "app" {
     from_port       = 443
     to_port         = 443
     protocol        = "tcp"
-    prefix_list_ids = [aws_vpc_endpoint.s3.prefix_list_id]
+    prefix_list_ids = [var.s3_prefix_list_id]
   }
 
   egress {
@@ -95,31 +94,6 @@ resource "aws_security_group" "app" {
 
   tags = {
     Name    = "${var.project_name}-app-sg"
-    Project = var.project_name
-  }
-}
-
-resource "aws_security_group" "db" {
-  name        = "${var.project_name}-db-sg"
-  description = "Allow inbound DB traffic from the app tier only"
-  vpc_id      = aws_vpc.this.id
-
-  ingress {
-    description     = "DB port from app tier"
-    from_port       = var.db_port
-    to_port         = var.db_port
-    protocol        = "tcp"
-    security_groups = [aws_security_group.app.id]
-  }
-
-  # No egress at all: RDS only answers connections, it never opens them,
-  # and SGs are stateful so replies to the app tier still flow. `egress =
-  # []` (not just deleting the block) is what makes Terraform actually
-  # remove AWS's default allow-all rule from an existing group.
-  egress = []
-
-  tags = {
-    Name    = "${var.project_name}-db-sg"
     Project = var.project_name
   }
 }
@@ -165,14 +139,14 @@ resource "aws_iam_role_policy" "s3_access" {
         Effect = "Allow"
         Action = ["s3:GetObject", "s3:PutObject"]
         Resource = [
-          "${aws_s3_bucket.receipts.arn}/*",
+          "${var.receipts_bucket_arn}/*",
         ]
       },
       {
         Sid      = "DeployBundleReadOnly"
         Effect   = "Allow"
         Action   = ["s3:GetObject"]
-        Resource = "${aws_s3_bucket.deploy.arn}/*"
+        Resource = "${var.deploy_bucket_arn}/*"
       }
     ]
   })
@@ -188,7 +162,7 @@ resource "aws_iam_role_policy" "db_secret_access" {
       Sid      = "ReadDbSecret"
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
-      Resource = aws_secretsmanager_secret.db_credentials.arn
+      Resource = var.db_credentials_secret_arn
     }]
   })
 }

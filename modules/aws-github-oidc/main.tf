@@ -1,7 +1,13 @@
-# Lets GitHub Actions assume an AWS role via OIDC federation instead of
+# Lets GitHub Actions assume AWS roles via OIDC federation instead of
 # storing a long-lived access key/secret as a GitHub secret -- AWS issues
 # short-lived credentials per workflow run, and there's nothing standing
 # to leak if the repo is ever compromised.
+#
+# Three roles, one per job type, each trusting only the sub claims of the
+# runs that need it:
+#   ci     -- read-only `terraform plan`, on main and on PRs
+#   deploy -- upload the app bundle + roll it out, main only
+#   apply  -- `terraform apply`, only from the approval-gated environment
 
 resource "aws_iam_openid_connect_provider" "github" {
   url            = "https://token.actions.githubusercontent.com"
@@ -17,11 +23,13 @@ resource "aws_iam_openid_connect_provider" "github" {
   }
 }
 
-# Scoped to this exact repo: runs on main, plus pull_request runs so every
-# PR gets a plan to review. Safe to open to PRs because the role is
-# read-only, and GitHub never issues an OIDC token to a pull_request run
-# triggered from a fork -- only branches pushed to this repo get one.
-resource "aws_iam_role" "github_actions_ci" {
+# --- ci: read-only plan -------------------------------------------------------
+
+# Runs on main, plus pull_request runs so every PR gets a plan to review.
+# Safe to open to PRs because the role is read-only, and GitHub never
+# issues an OIDC token to a pull_request run triggered from a fork -- only
+# branches pushed to this repo get one.
+resource "aws_iam_role" "ci" {
   name = "${var.project_name}-github-actions-ci"
 
   assume_role_policy = jsonencode({
@@ -35,16 +43,9 @@ resource "aws_iam_role" "github_actions_ci" {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
-          # GitHub's actual sub claim includes immutable numeric IDs after
-          # the owner and repo names (repo:OWNER@OWNER_ID/REPO@REPO_ID:...),
-          # not just repo:OWNER/REPO:... as most docs/examples show --
-          # confirmed via CloudTrail's logged AccessDenied event. Wildcard
-          # the ID portions since they add no security value here (this
-          # role is already scoped to one specific role ARN) and pinning
-          # them would silently break if GitHub ever changes the ID.
           "token.actions.githubusercontent.com:sub" = [
-            "repo:huyTrinhVAn@*/aws_architecture@*:ref:refs/heads/main",
-            "repo:huyTrinhVAn@*/aws_architecture@*:pull_request",
+            "${var.github_subject_prefix}:ref:refs/heads/main",
+            "${var.github_subject_prefix}:pull_request",
           ]
         }
       }
@@ -59,21 +60,20 @@ resource "aws_iam_role" "github_actions_ci" {
 
 # Read-only is sufficient for `terraform plan` (it only describes existing
 # resources to compute a diff) -- this role is deliberately not granted
-# anything that could mutate the account. `apply` uses the separate,
-# approval-gated github_actions_apply role below.
-resource "aws_iam_role_policy_attachment" "github_actions_ci_readonly" {
-  role       = aws_iam_role.github_actions_ci.name
+# anything that could mutate the account.
+resource "aws_iam_role_policy_attachment" "ci_readonly" {
+  role       = aws_iam_role.ci.name
   policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
 }
 
 # ReadOnlyAccess covers reading the state file itself, but `terraform plan`
 # with S3 native locking also needs to write and then delete a small
 # `.tflock` object to acquire/release the lock before it can read state --
-# a write action ReadOnlyAccess deliberately excludes. Scoped to exactly
-# the state file's path in this one bucket, not broad S3 write access.
-resource "aws_iam_role_policy" "github_actions_ci_state_lock" {
+# a write action ReadOnlyAccess deliberately excludes. Scoped to the state
+# files' path in the one state bucket, not broad S3 write access.
+resource "aws_iam_role_policy" "ci_state_lock" {
   name = "${var.project_name}-github-actions-ci-state-lock"
-  role = aws_iam_role.github_actions_ci.id
+  role = aws_iam_role.ci.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -81,20 +81,18 @@ resource "aws_iam_role_policy" "github_actions_ci_state_lock" {
       Sid      = "StateLockFile"
       Effect   = "Allow"
       Action   = ["s3:PutObject", "s3:DeleteObject"]
-      Resource = "arn:aws:s3:::sa-portfolio-tfstate-42ac9a0e/sa-portfolio/*"
+      Resource = var.state_lock_object_arn
     }]
   })
 }
 
-output "github_actions_role_arn" {
-  value = aws_iam_role.github_actions_ci.arn
-}
+# --- deploy: app bundle upload + rollout ------------------------------------
 
-# Separate from github_actions_ci on purpose -- that role stays read-only
-# for `terraform plan`. This role exists only to let the app-bundle build
-# job upload to the deploy bucket, so a bug or compromise in that one
+# Separate from ci on purpose -- that role stays read-only for `terraform
+# plan`. This role exists only to let the app-bundle job upload to the
+# deploy bucket and roll it out, so a bug or compromise in that one
 # workflow step can't be leveraged into reading the rest of the account.
-resource "aws_iam_role" "github_actions_deploy" {
+resource "aws_iam_role" "deploy" {
   name = "${var.project_name}-github-actions-deploy"
 
   assume_role_policy = jsonencode({
@@ -108,7 +106,7 @@ resource "aws_iam_role" "github_actions_deploy" {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:huyTrinhVAn@*/aws_architecture@*:ref:refs/heads/main"
+          "token.actions.githubusercontent.com:sub" = "${var.github_subject_prefix}:ref:refs/heads/main"
         }
       }
     }]
@@ -123,9 +121,9 @@ resource "aws_iam_role" "github_actions_deploy" {
 # Only PutObject on the deploy bucket -- no read, no delete, no access to
 # any other bucket or service. This role cannot read receipts, cannot touch
 # Terraform state, cannot see any other resource in the account.
-resource "aws_iam_role_policy" "github_actions_deploy_s3" {
+resource "aws_iam_role_policy" "deploy_s3" {
   name = "${var.project_name}-github-actions-deploy-s3"
-  role = aws_iam_role.github_actions_deploy.id
+  role = aws_iam_role.deploy.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -133,7 +131,7 @@ resource "aws_iam_role_policy" "github_actions_deploy_s3" {
       Sid      = "UploadAppBundle"
       Effect   = "Allow"
       Action   = ["s3:PutObject"]
-      Resource = "${aws_s3_bucket.deploy.arn}/*"
+      Resource = "${var.deploy_bucket_arn}/*"
     }]
   })
 }
@@ -143,9 +141,9 @@ resource "aws_iam_role_policy" "github_actions_deploy_s3" {
 # them one at a time behind the ALB -- a rolling deploy with no downtime.
 # Scoped to this one ASG; the role still can't launch, terminate or
 # resize anything directly.
-resource "aws_iam_role_policy" "github_actions_deploy_refresh" {
+resource "aws_iam_role_policy" "deploy_refresh" {
   name = "${var.project_name}-github-actions-deploy-refresh"
-  role = aws_iam_role.github_actions_deploy.id
+  role = aws_iam_role.deploy.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -153,22 +151,20 @@ resource "aws_iam_role_policy" "github_actions_deploy_refresh" {
       Sid      = "RollOutNewBundle"
       Effect   = "Allow"
       Action   = ["autoscaling:StartInstanceRefresh"]
-      Resource = aws_autoscaling_group.app.arn
+      Resource = var.deploy_asg_arn
     }]
   })
 }
 
-output "github_actions_deploy_role_arn" {
-  value = aws_iam_role.github_actions_deploy.arn
-}
+# --- apply: approval-gated terraform apply ----------------------------------
 
-# `terraform apply` from CI. The trust policy matches ONLY the
-# `environment:production` sub claim, which GitHub issues only to a job
-# that declares `environment: production` -- and that job can't start
-# until a required reviewer approves it in the GitHub UI. So the approval
-# gate is enforced by AWS, not just by the workflow file: a modified
-# workflow that skips the environment simply can't assume this role.
-resource "aws_iam_role" "github_actions_apply" {
+# The trust policy matches ONLY the `environment:<apply_environment>` sub
+# claim, which GitHub issues only to a job that declares that environment
+# -- and that job can't start until a required reviewer approves it in
+# the GitHub UI. So the approval gate is enforced by AWS, not just by the
+# workflow file: a modified workflow that skips the environment simply
+# can't assume this role.
+resource "aws_iam_role" "apply" {
   name = "${var.project_name}-github-actions-apply"
 
   assume_role_policy = jsonencode({
@@ -182,7 +178,7 @@ resource "aws_iam_role" "github_actions_apply" {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:huyTrinhVAn@*/aws_architecture@*:environment:production"
+          "token.actions.githubusercontent.com:sub" = "${var.github_subject_prefix}:environment:${var.apply_environment}"
         }
       }
     }]
@@ -198,13 +194,9 @@ resource "aws_iam_role" "github_actions_apply" {
 # (trust policy + environment approval above), not inside it. Next step
 # for a production setup: a permissions boundary that blocks IAM changes
 # outside the project's own role names.
-resource "aws_iam_role_policy_attachment" "github_actions_apply_admin" {
+resource "aws_iam_role_policy_attachment" "apply_admin" {
   #checkov:skip=CKV_AWS_274:Apply role must create IAM/VPC/RDS resources; access is gated by the environment-scoped trust policy + manual approval
 
-  role       = aws_iam_role.github_actions_apply.name
+  role       = aws_iam_role.apply.name
   policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
-}
-
-output "github_actions_apply_role_arn" {
-  value = aws_iam_role.github_actions_apply.arn
 }
