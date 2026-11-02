@@ -13,7 +13,7 @@ before it can reach AWS, and nothing is applied without a human approval.
 
 **What I built**
 - Checkov runs on every PR. I triaged the first scan's 41 failures: fixed 16, and documented every remaining exception inline with a reason.
-- I wrote my own Rego policies, run on the plan JSON: only the ALB may face the internet (ports 80/443 only), no SSH/RDP from any source, encryption at rest, required tags. They have 21 unit tests.
+- I wrote my own Rego policies, run on the plan JSON: only the ALB may face the internet (ports 80/443 only), no SSH/RDP from any source, encryption at rest, required tags, and no deleting stateful resources (databases, buckets) without prior approval. They have 35 unit tests.
 - Every PR gets a `terraform plan` posted as a comment, using a read-only OIDC role.
 - `apply` runs only after manual approval in a GitHub Environment. The AWS role trusts only that environment's OIDC claim, so AWS enforces the gate, not just the workflow file.
 - Branch protection makes all checks required. A test PR opening SSH to the internet was blocked by both layers.
@@ -53,6 +53,7 @@ our own rules against what Terraform will *actually* create.
 | `security_groups.rego` | ingress from `0.0.0.0/0` or `::/0` on any SG not tagged `Exposure=internet-facing`; anything but ports 80/443 open to the internet even on that SG; any ingress covering 22 (SSH) or 3389 (RDP), from any source |
 | `encryption.rego` | RDS or EBS storage without encryption; an S3 bucket with no server-side encryption configuration |
 | `tags.rego` | a taggable AWS resource missing `Project` or `ManagedBy` |
+| `stateful_deletes.rego` | deleting or replacing a resource that holds data (RDS, S3, DynamoDB, EFS, EBS...). This catches a refactor that forgot a `moved` block before it destroys a database. A deliberate deletion needs a separate, earlier PR that tags the resource `AllowDestroy=true`: the tag is read from the resource's current state, so it can't be added in the same PR that deletes it |
 
 Each policy has a `_test.rego` file with good and deliberately bad inputs.
 The tests caught a real bug while these policies were written: a helper
