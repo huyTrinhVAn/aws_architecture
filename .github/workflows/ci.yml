@@ -22,7 +22,7 @@ jobs:
       # not just the environment that calls them.
       - name: terraform fmt
         working-directory: .
-        run: terraform fmt -check -recursive envs modules
+        run: terraform fmt -check -recursive envs modules gcp-bootstrap
 
       # No AWS credentials here on purpose -- this only checks that the
       # config is syntactically valid and internally consistent, it never
@@ -49,8 +49,18 @@ jobs:
       - name: Install Checkov
         run: pip install checkov==3.3.30
 
+      # One run per directory: a multi-directory run only scans the first
+      # one (see .checkov.yaml). Every directory is scanned even if an
+      # earlier one fails, so the log shows all findings at once.
       - name: Checkov scan
-        run: checkov --config-file .checkov.yaml
+        run: |
+          status=0
+          for dir in envs modules gcp-bootstrap; do
+            echo "::group::checkov $dir"
+            checkov --config-file .checkov.yaml -d "$dir" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
 
   # The custom Rego policies are code too: formatted, and unit-tested
   # against hand-written plans (including deliberately bad ones) before

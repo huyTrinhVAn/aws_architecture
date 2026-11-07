@@ -64,7 +64,7 @@ while checking almost nothing.
 Run locally:
 
 ```powershell
-.\.venv\Scripts\python.exe -m checkov.main --config-file .checkov.yaml
+foreach ($d in "envs", "modules", "gcp-bootstrap") { .\.venv\Scripts\python.exe -m checkov.main --config-file .checkov.yaml -d $d }
 conftest verify --policy policy
 cd envs/aws-dev
 terraform plan -out=tfplan
