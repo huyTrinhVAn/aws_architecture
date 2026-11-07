@@ -18,3 +18,15 @@ output "tfstate_bucket" {
   description = "GCS bucket for every other GCP root's backend \"gcs\" block"
   value       = google_storage_bucket.tfstate.name
 }
+
+output "workload_identity_provider" {
+  description = "Value for google-github-actions/auth's workload_identity_provider input"
+  value       = google_iam_workload_identity_pool_provider.github.name
+}
+
+output "ci_service_accounts" {
+  value = {
+    plan  = google_service_account.tf_plan.email
+    apply = google_service_account.tf_apply.email
+  }
+}
