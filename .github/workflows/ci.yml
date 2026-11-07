@@ -33,6 +33,18 @@ jobs:
       - name: terraform validate
         run: terraform validate
 
+      # Same offline check for the GCP roots. -backend=false also means
+      # terraform_remote_state is never read, so no GCP credentials needed.
+      - name: terraform validate (GCP roots)
+        working-directory: .
+        run: |
+          for dir in gcp-bootstrap envs/gcp-dev; do
+            echo "::group::validate $dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+
   # Static scan of the .tf files against Checkov's built-in rules. Any
   # failed check fails the job (Checkov exits non-zero), which blocks the
   # PR. Accepted risks are skipped inline on the resource, with a reason,
