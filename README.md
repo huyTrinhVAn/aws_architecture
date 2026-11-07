@@ -161,4 +161,5 @@ The app runs locally with Docker MySQL: see [app/README.md](app/README.md).
 | [Policy as Code](docs/policy-as-code.md) | How the gates work, triage of all 41 initial findings |
 | [Terraform modules](docs/terraform-modules.md) | Module design, state migration, proof of zero change |
 | [Cost optimization](docs/cost-optimization.md) | NAT Gateway vs VPC endpoints, with the real numbers |
+| [AWS vs GCP](docs/aws-vs-gcp.md) | Only what actually works differently: networking in full, plus IAM, credentials, billing |
 | [Interview prep](docs/interview-prep.md) | Questions and model answers for every phase |
