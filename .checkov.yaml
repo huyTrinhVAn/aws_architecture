@@ -1,15 +1,15 @@
-# Shared by local runs and CI, so both scan exactly the same thing:
-#   checkov --config-file .checkov.yaml
-# Accepted risks and false positives are NOT skipped here globally --
-# each one is an inline `#checkov:skip=ID:reason` on the resource it
-# applies to, so the justification is reviewed in the same PR as the code.
+# Shared by local runs and CI. Accepted risks and false positives are NOT
+# skipped here globally -- each one is an inline `#checkov:skip=ID:reason`
+# on the resource it applies to, so the justification is reviewed in the
+# same PR as the code.
 #
-# envs/ is scanned with real input values (Checkov follows the module
-# calls); modules/ is scanned on its own too, so a module no environment
-# uses yet is still checked before anyone adopts it.
-directory:
-  - envs
-  - modules
+# No `directory:` list on purpose: with Checkov 3.3.30, several
+# directories in one run (here or as repeated -d flags) silently scan only
+# the FIRST one, N times over. CI runs one scan per directory instead:
+#   envs/           real input values (Checkov follows the module calls)
+#   modules/        each module on its own, so an unused module is checked too
+#   gcp-bootstrap/  the GCP landing zone
+# Locally:  checkov --config-file .checkov.yaml -d <directory>
 framework:
   - terraform
 compact: true
