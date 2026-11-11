@@ -19,7 +19,7 @@ data "aws_ami" "al2023_arm" {
 resource "aws_launch_template" "app" {
   name_prefix   = "${var.project_name}-app-"
   image_id      = data.aws_ami.al2023_arm.id
-  instance_type = var.instance_type
+  instance_type = var.instance_types[0] # the ASG's overrides below take precedence
 
   iam_instance_profile {
     arn = aws_iam_instance_profile.app.arn
@@ -128,13 +128,27 @@ resource "aws_autoscaling_group" "app" {
     instances_distribution {
       on_demand_base_capacity                  = 1
       on_demand_percentage_above_base_capacity = 0
-      spot_allocation_strategy                 = "price-capacity-optimized"
+      # On-Demand: try the types in list order (cheapest first).
+      on_demand_allocation_strategy = "prioritized"
+      # Spot: pick from the deepest, cheapest pools across every type and AZ.
+      spot_allocation_strategy = "price-capacity-optimized"
     }
 
     launch_template {
       launch_template_specification {
         launch_template_id = aws_launch_template.app.id
         version            = "$Latest"
+      }
+
+      # Several types, so running out of one type in one AZ doesn't block
+      # launches. Found the hard way: the first CI apply failed with
+      # InsufficientInstanceCapacity for t4g.micro On-Demand in us-east-1a,
+      # and Spot with only one type couldn't be filled either.
+      dynamic "override" {
+        for_each = var.instance_types
+        content {
+          instance_type = override.value
+        }
       }
     }
   }

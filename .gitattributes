@@ -1,0 +1,7 @@
+# Scripts that run on Linux must keep LF line endings in every checkout.
+# With core.autocrlf=true, Windows checkouts get CRLF, and a user_data
+# script with \r at the end of each line fails on boot ("set: pipefail\r:
+# invalid option name"). A local `terraform apply` from Windows would ship
+# exactly that to every new instance.
+*.sh     text eol=lf
+*.tftpl  text eol=lf

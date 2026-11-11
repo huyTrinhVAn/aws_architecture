@@ -82,10 +82,15 @@ variable "db_credentials_secret_arn" {
 
 # --- Capacity ------------------------------------------------------------------
 
-variable "instance_type" {
-  description = "Graviton (arm64) instance type -- the AMI lookup only returns arm64 images"
-  type        = string
-  default     = "t4g.micro"
+variable "instance_types" {
+  description = "Graviton (arm64) instance types the ASG may launch, cheapest first. More than one, so a capacity shortage of one type in one AZ doesn't block launches. arm64 only -- the AMI lookup only returns arm64 images"
+  type        = list(string)
+  default     = ["t4g.micro", "t4g.small"]
+
+  validation {
+    condition     = length(var.instance_types) >= 2
+    error_message = "List at least two instance types: a single type fails whenever AWS runs out of it (InsufficientInstanceCapacity)."
+  }
 }
 
 variable "min_size" {
