@@ -363,7 +363,12 @@ jobs:
   build-and-deploy-app:
     if: github.ref == 'refs/heads/main'
     needs: [app-tests, terraform-apply]
-    runs-on: ubuntu-latest
+    # Pinned, unlike the other jobs: the bundle must be built by a real
+    # Python 3.9 to match AL2023's python3 (pip evaluates dependency markers
+    # with the host interpreter, see app/requirements.txt), and
+    # actions/setup-python has no 3.9 build for ubuntu-latest (26.04).
+    # Long-term fix: run the app on AL2023's python3.11 package instead.
+    runs-on: ubuntu-24.04
     permissions:
       id-token: write
       contents: read
