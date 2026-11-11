@@ -1,25 +1,19 @@
 # ALB + Auto Scaling Group hosting the app tier, with a Spot/
 # On-Demand mix on Graviton (t4g) instances.
 
-data "aws_ami" "al2023_arm" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*-arm64"]
-  }
-
-  filter {
-    name   = "architecture"
-    values = ["arm64"]
-  }
+# AWS's own pointer to the latest standard AL2023 arm64 AMI. Not a name
+# filter: "al2023-ami-*-arm64" also matches the *minimal* AMI, which has no
+# SSM agent, and most_recent picked it whenever AWS happened to publish it
+# last -- instances then booted with no way in at all (no SSH by design,
+# and no Session Manager).
+data "aws_ssm_parameter" "al2023_arm" {
+  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
 }
 
 resource "aws_launch_template" "app" {
   name_prefix   = "${var.project_name}-app-"
-  image_id      = data.aws_ami.al2023_arm.id
-  instance_type = var.instance_types[0] # the ASG's overrides below take precedence
+  image_id      = nonsensitive(data.aws_ssm_parameter.al2023_arm.value) # a public AMI ID, not a secret
+  instance_type = var.instance_types[0]                                 # the ASG's overrides below take precedence
 
   iam_instance_profile {
     arn = aws_iam_instance_profile.app.arn
