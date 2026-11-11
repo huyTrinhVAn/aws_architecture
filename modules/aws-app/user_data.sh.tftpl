@@ -45,6 +45,36 @@ PYEOF
 chmod 600 /etc/app.env
 rm -f /tmp/db_secret.json
 
+# Create the tables and seed categories. schema.sql is idempotent (CREATE
+# TABLE IF NOT EXISTS, ON DUPLICATE KEY UPDATE), so every instance can run
+# it on boot: a freshly re-created RDS gets its schema without anyone
+# connecting to it by hand.
+python3 - <<'PYEOF'
+import pymysql
+
+env = {}
+for line in open("/etc/app.env"):
+    if "=" in line:
+        key, value = line.rstrip("\n").split("=", 1)
+        env[key] = value
+
+conn = pymysql.connect(
+    host=env["DB_HOST"],
+    port=int(env["DB_PORT"]),
+    user=env["DB_USER"],
+    password=env["DB_PASSWORD"],
+    database=env["DB_NAME"],
+)
+try:
+    with conn.cursor() as cursor:
+        for statement in open("/opt/app/schema.sql").read().split(";"):
+            if statement.strip():
+                cursor.execute(statement)
+    conn.commit()
+finally:
+    conn.close()
+PYEOF
+
 cat >> /etc/app.env <<EOF
 APP_PORT=${app_port}
 RECEIPTS_BUCKET=${receipts_bucket}
