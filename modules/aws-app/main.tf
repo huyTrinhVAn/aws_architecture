@@ -116,6 +116,15 @@ resource "aws_autoscaling_group" "app" {
   health_check_type         = "ELB"
   health_check_grace_period = 60
 
+  # Don't make `terraform apply` wait for capacity. The AWS provider fails
+  # the apply on the FIRST failed scaling activity, but a per-AZ capacity
+  # shortage is routine and the ASG retries on its own: on the second CI
+  # apply, us-east-1a had no t4g capacity, the ASG filled both instances in
+  # us-east-1b seconds later, and Terraform had already errored and tainted
+  # the ASG. Whether instances actually serve traffic is checked by the ALB
+  # health check and the deploy job's instance refresh instead.
+  wait_for_capacity_timeout = "0"
+
   min_size         = var.min_size
   max_size         = var.max_size
   desired_capacity = var.desired_capacity
