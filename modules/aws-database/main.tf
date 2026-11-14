@@ -96,6 +96,12 @@ resource "aws_secretsmanager_secret" "db_credentials" {
 
   name = "${var.project_name}/db-credentials"
 
+  # Delete immediately on destroy. The default 30-day recovery window keeps
+  # the name reserved, so re-creating the stack within 30 days of a destroy
+  # fails ("already scheduled for deletion"). The secret is useless once the
+  # DB it points to is gone; a production secret would keep the window.
+  recovery_window_in_days = 0
+
   tags = {
     Name    = "${var.project_name}-db-credentials"
     Project = var.project_name
