@@ -13,3 +13,7 @@ output "network_id" {
 output "app_subnet_self_link" {
   value = module.network.app_subnet_self_link
 }
+
+output "app_instance_group" {
+  value = module.app.instance_group
+}

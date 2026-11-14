@@ -34,3 +34,13 @@ module "network" {
     "serviceAccount:${data.google_project.app.number}@cloudservices.gserviceaccount.com",
   ]
 }
+
+module "app" {
+  source = "../../modules/gcp-app"
+
+  project_id       = local.app_project_id
+  host_project_id  = local.host_project_id
+  region           = var.region
+  network_id       = module.network.network_id
+  subnet_self_link = module.network.app_subnet_self_link
+}
